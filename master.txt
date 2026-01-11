@@ -1,30 +1,48 @@
 We have started here.
 i have added this line for the deve
 
-## 12 MHz Clock Signal
+## 12 MHz System Clock
 set_property -dict { PACKAGE_PIN M9    IOSTANDARD LVCMOS33 } [get_ports { clk_i }]; 
 create_clock -add -name sys_clk_pin -period 83.33 -waveform {0 41.66} [get_ports { clk_i }];
 
-## Buttons (Used for Reset)
-set_property -dict { PACKAGE_PIN D2    IOSTANDARD LVCMOS33 } [get_ports { rst_n_i }]; # BTN0
+## --------------------------------------------------------------------------
+## FAULT INJECTION (Using On-Board Buttons)
+## --------------------------------------------------------------------------
+## BTN0 -> Injects "Overcurrent Phase U"
+set_property -dict { PACKAGE_PIN D2    IOSTANDARD LVCMOS33 } [get_ports { hp_oc_phase_u_n_i }]; 
 
-## LEDs
-set_property -dict { PACKAGE_PIN E2    IOSTANDARD LVCMOS33 } [get_ports { debug_led1_o }]; # LED0
-set_property -dict { PACKAGE_PIN K1    IOSTANDARD LVCMOS33 } [get_ports { debug_led2_o }]; # LED1
+## BTN1 -> Injects "Undervoltage Sepic"
+set_property -dict { PACKAGE_PIN D1    IOSTANDARD LVCMOS33 } [get_ports { hp_uv_sepic_n_i }]; 
 
-## SPI PINS (Assign these to the Cmod S7 DIP pins you choose)
-## Example mappings to DIP pins 40-43
+## --------------------------------------------------------------------------
+## SYSTEM RESET (Moved to DIP Pin 1)
+## --------------------------------------------------------------------------
+## Connect DIP Pin 1 to GND to reset. otherwise leave floating (Internal Pull-up)
+set_property -dict { PACKAGE_PIN M3    IOSTANDARD LVCMOS33 PULLUP true } [get_ports { rst_n_i }];
+
+## --------------------------------------------------------------------------
+## SPI PINS (Using DIP Pins 40-43)
+## --------------------------------------------------------------------------
 set_property -dict { PACKAGE_PIN L1    IOSTANDARD LVCMOS33 } [get_ports { spi_ss_n_i }];  
 set_property -dict { PACKAGE_PIN M2    IOSTANDARD LVCMOS33 } [get_ports { spi_mosi_i }]; 
 set_property -dict { PACKAGE_PIN N2    IOSTANDARD LVCMOS33 } [get_ports { spi_miso_o }]; 
 set_property -dict { PACKAGE_PIN P2    IOSTANDARD LVCMOS33 } [get_ports { spi_sclk_i }]; 
 
-## INPUT PINS (Faults)
-## You must assign these to the remaining DIP pins.
-## Example for just the first few (You must fill in the rest):
-# set_property -dict { PACKAGE_PIN L2   IOSTANDARD LVCMOS33 } [get_ports { hp_oc_phase_u_n_i }];
-# set_property -dict { PACKAGE_PIN M3   IOSTANDARD LVCMOS33 } [get_ports { hp_oc_phase_v_n_i }];
-# ... continue for all input ports ...
+## --------------------------------------------------------------------------
+## DEBUG LEDs (On-Board)
+## --------------------------------------------------------------------------
+set_property -dict { PACKAGE_PIN E2    IOSTANDARD LVCMOS33 } [get_ports { debug_led1_o }]; # LED0
+set_property -dict { PACKAGE_PIN K1    IOSTANDARD LVCMOS33 } [get_ports { debug_led2_o }]; # LED1
+set_property -dict { PACKAGE_PIN J1    IOSTANDARD LVCMOS33 } [get_ports { hp_flt_n_o }];   # LED2 (Visual fault indicator)
+
+
+## --------------------------------------------------------------------------
+## UNUSED FAULTS (Tied to safe values to prevent floating errors)
+## --------------------------------------------------------------------------
+## We map these to unused pins or you can use internal pull-ups in VHDL. 
+## For this XDC, we will map them to arbitrary pins with PULLUP to keep them "No Fault"
+## Or simply do not assign them here and tie them to '1' in your VHDL top file.
+## (See Step 2 below for the cleaner VHDL fix).
 
 
 
@@ -416,3 +434,26 @@ begin
     end process;
 
 end Behavioral;
+
+
+-------------------------------------------------------------------------
+    -- 1. INPUT MAPPING & INVERSION
+    -------------------------------------------------------------------------
+    -- MODIFIED FOR BUTTON INJECTION:
+    -- Remove "not" for the signals connected to buttons so 
+    -- Logic 1 (Button Press) = Logic 1 (Fault in Vector)
+    
+    hps_vector(0)  <= hp_oc_phase_u_n_i;  -- Connected to BTN0 (Press = Fault)
+    hps_vector(1)  <= not hp_oc_phase_v_n_i; -- Still external wire (Active Low)
+    hps_vector(2)  <= not hp_oc_phase_w_n_i; -- Still external wire
+    
+    hps_vector(3)  <= hp_uv_sepic_n_i;    -- Connected to BTN1 (Press = Fault)
+
+
+
+-- Example of setting default to '1' in the entity
+hp_oc_phase_v_n_i   : in  std_logic := '1'; 
+hp_oc_phase_w_n_i   : in  std_logic := '1';
+-- ... do this for all inputs you are not connecting to buttons!
+
+
