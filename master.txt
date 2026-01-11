@@ -1,5 +1,220 @@
 We have started here.
-i have added this line for the develo
+i have added this line for the deve
+
+## 12 MHz Clock Signal
+set_property -dict { PACKAGE_PIN M9    IOSTANDARD LVCMOS33 } [get_ports { clk_i }]; 
+create_clock -add -name sys_clk_pin -period 83.33 -waveform {0 41.66} [get_ports { clk_i }];
+
+## Buttons (Used for Reset)
+set_property -dict { PACKAGE_PIN D2    IOSTANDARD LVCMOS33 } [get_ports { rst_n_i }]; # BTN0
+
+## LEDs
+set_property -dict { PACKAGE_PIN E2    IOSTANDARD LVCMOS33 } [get_ports { debug_led1_o }]; # LED0
+set_property -dict { PACKAGE_PIN K1    IOSTANDARD LVCMOS33 } [get_ports { debug_led2_o }]; # LED1
+
+## SPI PINS (Assign these to the Cmod S7 DIP pins you choose)
+## Example mappings to DIP pins 40-43
+set_property -dict { PACKAGE_PIN L1    IOSTANDARD LVCMOS33 } [get_ports { spi_ss_n_i }];  
+set_property -dict { PACKAGE_PIN M2    IOSTANDARD LVCMOS33 } [get_ports { spi_mosi_i }]; 
+set_property -dict { PACKAGE_PIN N2    IOSTANDARD LVCMOS33 } [get_ports { spi_miso_o }]; 
+set_property -dict { PACKAGE_PIN P2    IOSTANDARD LVCMOS33 } [get_ports { spi_sclk_i }]; 
+
+## INPUT PINS (Faults)
+## You must assign these to the remaining DIP pins.
+## Example for just the first few (You must fill in the rest):
+# set_property -dict { PACKAGE_PIN L2   IOSTANDARD LVCMOS33 } [get_ports { hp_oc_phase_u_n_i }];
+# set_property -dict { PACKAGE_PIN M3   IOSTANDARD LVCMOS33 } [get_ports { hp_oc_phase_v_n_i }];
+# ... continue for all input ports ...
+
+
+
+#include <SPI.h>
+
+// --- PIN DEFINITIONS FOR ARDUINO MEGA ---
+// SCK:  Pin 52
+// MISO: Pin 50
+// MOSI: Pin 51
+// SS:   Pin 53 (Hardware SS, but we can use any pin for manual control)
+const int CS_PIN = 53; 
+
+// --- CONFIGURATION ---
+// Speed: 1 MHz (Slow enough for robust jumper wire connections)
+// Bit Order: MSBFIRST (Matches VHDL shift logic)
+// Mode: SPI_MODE0 (Matches VHDL rising_edge sampling)
+SPISettings settingsA(1000000, MSBFIRST, SPI_MODE0); 
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) {
+    ; // Wait for serial port to connect
+  }
+
+  Serial.println("Starting Cmod S7 SPI Reader...");
+
+  // Initialize Chip Select pin
+  pinMode(CS_PIN, OUTPUT);
+  digitalWrite(CS_PIN, HIGH); // Set IDLE (Active Low, so High is inactive)
+
+  // Initialize SPI
+  SPI.begin();
+}
+
+void loop() {
+  uint16_t receivedData = 0;
+  byte highByte = 0;
+  byte lowByte = 0;
+
+  // 1. Start Transaction
+  SPI.beginTransaction(settingsA);
+  digitalWrite(CS_PIN, LOW); // Pull Low to activate FPGA Slave
+
+  // 2. Transfer Data
+  // We send 0x00 (dummy data) just to push the clock pulses.
+  // The FPGA sends data back on MISO simultaneously.
+  
+  // Read High Byte (Bits 15-8)
+  highByte = SPI.transfer(0x00);
+  
+  // Read Low Byte (Bits 7-0)
+  lowByte = SPI.transfer(0x00);
+
+  // 3. End Transaction
+  digitalWrite(CS_PIN, HIGH); // Pull High to de-select
+  SPI.endTransaction();
+
+  // 4. Combine Bytes into 16-bit word
+  receivedData = (highByte << 8) | lowByte;
+
+  // 5. Decode and Print
+  // Only print if there is a non-zero value (an error exists)
+  if (receivedData != 0) {
+    Serial.print("Fault Detected! Raw Data: 0x");
+    Serial.println(receivedData, HEX);
+    decodeFaults(receivedData);
+    Serial.println("-----------------------------");
+  } else {
+    // Optional: Print a "System OK" message every second
+    // Serial.println("System OK - No Faults");
+  }
+
+  delay(100); // Poll every 100ms
+}
+
+// Helper function to map bits to human readable errors
+// Based on the VHDL mapping we created
+void decodeFaults(uint16_t data) {
+  if (bitRead(data, 0)) Serial.println(" - [Error] OC Phase U");
+  if (bitRead(data, 1)) Serial.println(" - [Error] OC Phase V");
+  if (bitRead(data, 2)) Serial.println(" - [Error] OC Phase W");
+  if (bitRead(data, 3)) Serial.println(" - [Error] UV Sepic");
+  if (bitRead(data, 4)) Serial.println(" - [Error] OV DC Link");
+  
+  if (bitRead(data, 5)) Serial.println(" - [Error] Gate Driver Top U");
+  if (bitRead(data, 6)) Serial.println(" - [Error] Gate Driver Top V");
+  if (bitRead(data, 7)) Serial.println(" - [Error] Gate Driver Top W");
+  
+  if (bitRead(data, 8)) Serial.println(" - [Error] Gate Driver Bot U");
+  if (bitRead(data, 9)) Serial.println(" - [Error] Gate Driver Bot V");
+  if (bitRead(data, 10)) Serial.println(" - [Error] Gate Driver Bot W");
+  
+  if (bitRead(data, 11)) Serial.println(" - [Error] Resolver Excitation Pos");
+  if (bitRead(data, 12)) Serial.println(" - [Error] Resolver Excitation Neg");
+}
+
+
+#include <SPI.h>
+
+// --- PIN DEFINITIONS FOR ARDUINO MEGA ---
+// SCK:  Pin 52
+// MISO: Pin 50
+// MOSI: Pin 51
+// SS:   Pin 53 (Hardware SS, but we can use any pin for manual control)
+const int CS_PIN = 53; 
+
+// --- CONFIGURATION ---
+// Speed: 1 MHz (Slow enough for robust jumper wire connections)
+// Bit Order: MSBFIRST (Matches VHDL shift logic)
+// Mode: SPI_MODE0 (Matches VHDL rising_edge sampling)
+SPISettings settingsA(1000000, MSBFIRST, SPI_MODE0); 
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) {
+    ; // Wait for serial port to connect
+  }
+
+  Serial.println("Starting Cmod S7 SPI Reader...");
+
+  // Initialize Chip Select pin
+  pinMode(CS_PIN, OUTPUT);
+  digitalWrite(CS_PIN, HIGH); // Set IDLE (Active Low, so High is inactive)
+
+  // Initialize SPI
+  SPI.begin();
+}
+
+void loop() {
+  uint16_t receivedData = 0;
+  byte highByte = 0;
+  byte lowByte = 0;
+
+  // 1. Start Transaction
+  SPI.beginTransaction(settingsA);
+  digitalWrite(CS_PIN, LOW); // Pull Low to activate FPGA Slave
+
+  // 2. Transfer Data
+  // We send 0x00 (dummy data) just to push the clock pulses.
+  // The FPGA sends data back on MISO simultaneously.
+  
+  // Read High Byte (Bits 15-8)
+  highByte = SPI.transfer(0x00);
+  
+  // Read Low Byte (Bits 7-0)
+  lowByte = SPI.transfer(0x00);
+
+  // 3. End Transaction
+  digitalWrite(CS_PIN, HIGH); // Pull High to de-select
+  SPI.endTransaction();
+
+  // 4. Combine Bytes into 16-bit word
+  receivedData = (highByte << 8) | lowByte;
+
+  // 5. Decode and Print
+  // Only print if there is a non-zero value (an error exists)
+  if (receivedData != 0) {
+    Serial.print("Fault Detected! Raw Data: 0x");
+    Serial.println(receivedData, HEX);
+    decodeFaults(receivedData);
+    Serial.println("-----------------------------");
+  } else {
+    // Optional: Print a "System OK" message every second
+    // Serial.println("System OK - No Faults");
+  }
+
+  delay(100); // Poll every 100ms
+}
+
+// Helper function to map bits to human readable errors
+// Based on the VHDL mapping we created
+void decodeFaults(uint16_t data) {
+  if (bitRead(data, 0)) Serial.println(" - [Error] OC Phase U");
+  if (bitRead(data, 1)) Serial.println(" - [Error] OC Phase V");
+  if (bitRead(data, 2)) Serial.println(" - [Error] OC Phase W");
+  if (bitRead(data, 3)) Serial.println(" - [Error] UV Sepic");
+  if (bitRead(data, 4)) Serial.println(" - [Error] OV DC Link");
+  
+  if (bitRead(data, 5)) Serial.println(" - [Error] Gate Driver Top U");
+  if (bitRead(data, 6)) Serial.println(" - [Error] Gate Driver Top V");
+  if (bitRead(data, 7)) Serial.println(" - [Error] Gate Driver Top W");
+  
+  if (bitRead(data, 8)) Serial.println(" - [Error] Gate Driver Bot U");
+  if (bitRead(data, 9)) Serial.println(" - [Error] Gate Driver Bot V");
+  if (bitRead(data, 10)) Serial.println(" - [Error] Gate Driver Bot W");
+  
+  if (bitRead(data, 11)) Serial.println(" - [Error] Resolver Excitation Pos");
+  if (bitRead(data, 12)) Serial.println(" - [Error] Resolver Excitation Neg");
+}
+
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
