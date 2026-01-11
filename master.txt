@@ -1,2 +1,203 @@
 We have started here.
-i have added this line for the develop.
+i have added this line for the develo
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+-- Entity Definition (Based on your "nextgen_cpld_inv_top")
+entity cmod_s7_error_hub is
+    Port ( 
+        -- System Clock (Cmod S7 uses 12MHz usually)
+        clk_i               : in  std_logic;
+        rst_n_i             : in  std_logic; -- Add a reset button assignment
+
+        -- HARDWARE PROTECTION INPUTS (Active Low based on your code)
+        -- Overcurrent
+        hp_oc_phase_u_n_i   : in  std_logic;
+        hp_oc_phase_v_n_i   : in  std_logic;
+        hp_oc_phase_w_n_i   : in  std_logic;
+        
+        -- Sepic / DC Link
+        hp_uv_sepic_n_i     : in  std_logic;
+        hp_ov_dc_i          : in  std_logic; -- Note: Logic implies this might be Active High in your code?
+        
+        -- Gate Driver Faults (Top)
+        hp_gd_fault_top_u_n_i : in std_logic;
+        hp_gd_fault_top_v_n_i : in std_logic;
+        hp_gd_fault_top_w_n_i : in std_logic;
+
+        -- Gate Driver Faults (Bottom)
+        hp_gd_fault_bot_u_n_i : in std_logic;
+        hp_gd_fault_bot_v_n_i : in std_logic;
+        hp_gd_fault_bot_w_n_i : in std_logic;
+
+        -- Resolver
+        hp_res_exc_oc_pos_n_i : in std_logic;
+        hp_res_exc_oc_neg_n_i : in std_logic;
+
+        -- Gate Driver Ready (Just in case you need them)
+        hp_gd_rdy_u_n_i       : in std_logic;
+        hp_gd_rdy_v_n_i       : in std_logic;
+        hp_gd_rdy_w_n_i       : in std_logic;
+
+        -- OUTPUTS
+        hp_flt_n_o            : out std_logic; -- Global Fault Output
+        debug_led1_o          : out std_logic;
+        debug_led2_o          : out std_logic;
+        
+        -- SPI INTERFACE (Slave Mode)
+        spi_sclk_i            : in  std_logic;
+        spi_mosi_i            : in  std_logic;
+        spi_ss_n_i            : in  std_logic;
+        spi_miso_o            : out std_logic
+    );
+end cmod_s7_error_hub;
+
+architecture Behavioral of cmod_s7_error_hub is
+
+    -- CONSTANTS
+    constant DATA_WIDTH : integer := 16; -- Sending 16 bits of error data
+
+    -- INTERNAL SIGNALS
+    
+    -- Raw Synchronized Signals
+    signal sync_stage1 : std_logic_vector(15 downto 0) := (others => '0');
+    signal sync_stage2 : std_logic_vector(15 downto 0) := (others => '0');
+    
+    -- The "HPS" (Hardware Protection Status) Vector
+    signal hps_vector  : std_logic_vector(15 downto 0);
+    
+    -- SPI Signals
+    signal spi_tx_reg  : std_logic_vector(DATA_WIDTH-1 downto 0) := (others => '0');
+    signal bit_cnt     : integer range 0 to DATA_WIDTH := 0;
+    
+    -- Internal version of SPI clock for edge detection
+    signal sclk_meta   : std_logic;
+    signal sclk_sync   : std_logic;
+    signal sclk_old    : std_logic;
+
+begin
+
+    -------------------------------------------------------------------------
+    -- 1. INPUT MAPPING & INVERSION
+    -- Based on your code (Image 3), inputs are active low and need inversion
+    -------------------------------------------------------------------------
+    -- Mapping bits to a vector for easier handling
+    -- Bit 0: OC Phase U
+    hps_vector(0)  <= not hp_oc_phase_u_n_i; 
+    hps_vector(1)  <= not hp_oc_phase_v_n_i;
+    hps_vector(2)  <= not hp_oc_phase_w_n_i;
+    
+    -- Bit 3-4: Voltage
+    hps_vector(3)  <= not hp_uv_sepic_n_i;
+    hps_vector(4)  <= hp_ov_dc_i; -- Assuming active high based on name, invert if needed
+    
+    -- Bit 5-7: GD Fault Top
+    hps_vector(5)  <= not hp_gd_fault_top_u_n_i;
+    hps_vector(6)  <= not hp_gd_fault_top_v_n_i;
+    hps_vector(7)  <= not hp_gd_fault_top_w_n_i;
+    
+    -- Bit 8-10: GD Fault Bot
+    hps_vector(8)  <= not hp_gd_fault_bot_u_n_i;
+    hps_vector(9)  <= not hp_gd_fault_bot_v_n_i;
+    hps_vector(10) <= not hp_gd_fault_bot_w_n_i;
+    
+    -- Bit 11-12: Resolver
+    hps_vector(11) <= not hp_res_exc_oc_pos_n_i;
+    hps_vector(12) <= not hp_res_exc_oc_neg_n_i;
+    
+    -- Bit 13-15: Spares/Ready
+    hps_vector(13) <= not hp_gd_rdy_u_n_i;
+    hps_vector(14) <= not hp_gd_rdy_v_n_i;
+    hps_vector(15) <= not hp_gd_rdy_w_n_i;
+
+    -------------------------------------------------------------------------
+    -- 2. SYNCHRONIZATION (Replaces std_logic_sync)
+    -- FPGAs need this to prevent metastability from external signals
+    -------------------------------------------------------------------------
+    process(clk_i)
+    begin
+        if rising_edge(clk_i) then
+            sync_stage1 <= hps_vector;
+            sync_stage2 <= sync_stage1; -- sync_stage2 is now safe to use
+        end if;
+    end process;
+
+    -------------------------------------------------------------------------
+    -- 3. GLOBAL FAULT OUTPUT LOGIC
+    -- If any bit in the error vector is '1', trigger the fault line
+    -------------------------------------------------------------------------
+    process(clk_i)
+    begin
+        if rising_edge(clk_i) then
+            if unsigned(sync_stage2) > 0 then
+                hp_flt_n_o <= '0'; -- Active Low Fault (Pull down if error)
+                debug_led1_o <= '1'; -- Turn on LED on Cmod S7
+            else
+                hp_flt_n_o <= '1'; -- High Impedance / No Fault
+                debug_led1_o <= '0';
+            end if;
+        end if;
+    end process;
+
+    debug_led2_o <= not spi_ss_n_i; -- Light up LED 2 when SPI is active
+
+    -------------------------------------------------------------------------
+    -- 4. SPI SLAVE CORE (Functional Replacement)
+    -- Transmits the Error Vector when a Master clocks it out
+    -- MODE 0 (CPOL=0, CPHA=0)
+    -------------------------------------------------------------------------
+    
+    -- First, synchronize the SPI Clock to our system clock (Oversampling method)
+    -- This is safer than using sclk_i as a clock directly
+    process(clk_i)
+    begin
+        if rising_edge(clk_i) then
+            sclk_meta <= spi_sclk_i;
+            sclk_sync <= sclk_meta;
+            sclk_old  <= sclk_sync;
+        end if;
+    end process;
+
+    process(clk_i, rst_n_i)
+    begin
+        if rst_n_i = '0' then
+            spi_miso_o <= 'Z';
+            spi_tx_reg <= (others => '0');
+            bit_cnt <= 0;
+        elsif rising_edge(clk_i) then
+            
+            -- If Chip Select is High (Inactive), reset SPI state
+            if spi_ss_n_i = '1' then
+                bit_cnt <= 0;
+                spi_miso_o <= 'Z'; -- High Impedance when not selected
+                -- Load the latest error data into the shift register
+                spi_tx_reg <= sync_stage2; 
+            else
+                -- Chip Select is Low (Active)
+                
+                -- Detect Falling Edge of SCLK (Shift out next bit)
+                -- (Note: For Mode 0, MSB is typically driven on SS falling, 
+                -- or immediately. Here we drive bit 15 immediately).
+                
+                if bit_cnt = 0 then
+                    spi_miso_o <= spi_tx_reg(DATA_WIDTH - 1);
+                else
+                    spi_miso_o <= spi_tx_reg(DATA_WIDTH - 1);
+                end if;
+
+                -- Detect Rising Edge of SCLK (Master samples, we shift internally)
+                if (sclk_old = '0' and sclk_sync = '1') then
+                    -- Shift the register left
+                    spi_tx_reg <= spi_tx_reg(DATA_WIDTH-2 downto 0) & '0';
+                    if bit_cnt < DATA_WIDTH then
+                        bit_cnt <= bit_cnt + 1;
+                    end if;
+                end if;
+                
+            end if;
+        end if;
+    end process;
+
+end Behavioral;
